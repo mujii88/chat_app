@@ -10,7 +10,7 @@ dotenv.config();
 
 
 import path from 'path';
-const port=process.env.PORT;
+const port=process.env.PORT||5001;
 
 const __dirname=path.resolve();
 app.use(express.json());
