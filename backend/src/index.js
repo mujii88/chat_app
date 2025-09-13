@@ -30,7 +30,9 @@ app.use("/api/messages", messageRoutes);
 // Serve frontend in production
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(__dirname, "../frontend/dist")));
-  app.get("*", (req, res) => {
+
+  // Fallback for React Router (Express 5 safe)
+  app.use((req, res) => {
     res.sendFile(path.join(__dirname, "../frontend", "dist", "index.html"));
   });
 }
