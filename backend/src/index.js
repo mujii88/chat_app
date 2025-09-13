@@ -9,8 +9,10 @@ import {app,server} from './lib/socket.js'
 dotenv.config();
 
 
-
+import path from 'path';
 const port=process.env.PORT;
+
+const __dirname=path.resolve();
 app.use(express.json());
 app.use(cookieParser());
 app.use(cors({
@@ -19,6 +21,12 @@ app.use(cors({
 }));
 app.use('/api/auth',authRoutes)
 app.use('/api/messages',messageRoutes);
+if (process.env.Node_ENV=='production'){
+    app.use(express.static(path.join(__dirname,"../frontend/dict")))
+    app.get('*',(req,res)=>{
+        res.sendFile(path.join(__dirname,"../frontend","dist",'index.html'))
+    })
+}
 server.listen(port,()=>{
     console.log(`server is running on the port ${port}`);
     connectDB()
