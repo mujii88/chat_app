@@ -7,7 +7,7 @@ const BASE_URL=import.meta.env.MODE==='development'?'http://localhost:5001':'/'
 export const useAuthStore=create((set,get)=>({
     authUser:null,
     isSigningUp:false,
-    isLoggingUo:false,
+    isLoggingIn:false,
     isUpdatingProfile:false,
     isCheckingAuth:true,
     onlineUsers:[],
@@ -31,7 +31,10 @@ export const useAuthStore=create((set,get)=>({
 
         try {
             const res =await axiosInstance.post('/auth/signup',data);
-            
+            // store per-tab token
+            if (res?.data?.token) {
+                sessionStorage.setItem('token', res.data.token);
+            }
             set({authUser:res.data});
             toast.success('Signup successful');
         } catch (error) {
@@ -42,13 +45,18 @@ export const useAuthStore=create((set,get)=>({
     },
 
     login: async (data)=>{
+        set({isLoggingIn:true});
         try {
             const res =await axiosInstance.post('/auth/login',data);
+            // store per-tab token
+            if (res?.data?.token) {
+                sessionStorage.setItem('token', res.data.token);
+            }
             set({authUser:res.data});
             toast.success('Login successful');
             get().connectSocket()
         } catch (error) {
-            toast.error(error.response.data.message);
+            toast.error(error.response?.data?.message || 'Login failed');
 
         } finally {
             set({isLoggingIn:false});
@@ -59,6 +67,10 @@ export const useAuthStore=create((set,get)=>({
         try {
             const res = await axiosInstance.post('/auth/logout');
             set({ authUser: null });
+            // clear per-tab token
+            if (typeof window !== 'undefined') {
+                sessionStorage.removeItem('token');
+            }
             toast.success('Logout successful');
             get().disconnectSocket()
         } catch (error) {
