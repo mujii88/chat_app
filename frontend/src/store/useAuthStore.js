@@ -2,6 +2,7 @@ import {create} from 'zustand'
 import { axiosInstance } from '../lib/axios'
 import toast from 'react-hot-toast';
 import {io} from 'socket.io-client'
+import { useCallStore } from './useCallStore';
 
 const BASE_URL=import.meta.env.MODE==='development'?'http://localhost:5001':'/'
 export const useAuthStore=create((set,get)=>({
@@ -103,6 +104,12 @@ export const useAuthStore=create((set,get)=>({
         socket.connect()
 
         set({socket:socket})
+        // attach socket to call store for WebRTC signaling
+        try {
+            useCallStore.getState().attachSocket(socket);
+        } catch (e) {
+            console.warn('Failed to attach socket to call store', e);
+        }
         socket.on('getOnlineUsers',(userIds)=>{
             set({onlineUsers:userIds})
         })
