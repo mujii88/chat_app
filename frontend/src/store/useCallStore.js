@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import toast from 'react-hot-toast';
+import { useChatStore } from './useChatStore';
+import { useAuthStore } from './useAuthStore';
 
 // Simple helper to ensure we have a global hidden audio element for remote stream playback
 function ensureRemoteAudioEl() {
@@ -8,10 +10,53 @@ function ensureRemoteAudioEl() {
     el = document.createElement('audio');
     el.id = 'remote-audio';
     el.autoplay = true;
+    el.playsInline = true;
+    el.muted = false;
+    el.volume = 1.0;
     el.style.display = 'none';
     document.body.appendChild(el);
   }
   return el;
+}
+
+// Ringtone utilities
+function ensureRingtoneEl() {
+  let el = document.getElementById('incoming-call-tone');
+  if (!el) {
+    el = document.createElement('audio');
+    el.id = 'incoming-call-tone';
+    el.loop = true;
+    el.preload = 'auto';
+    // Louder ringtone asset (can be replaced with a local file later)
+    el.src = 'https://actions.google.com/sounds/v1/alarms/old_fashioned_clock_alarm.ogg';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+// WebAudio boost chain for ringtone
+// Removed WebAudio chain to avoid InvalidStateError when HMR/hot reload rebinds sources.
+
+async function playRingtone() {
+  try {
+    const el = ensureRingtoneEl();
+    el.muted = false;
+    el.volume = 1.0;
+    el.currentTime = 0;
+    await el.play();
+  } catch (e) {
+    // Autoplay may be blocked; ignore
+    console.warn('Ringtone play blocked by browser', e);
+  }
+}
+
+function stopRingtone() {
+  const el = document.getElementById('incoming-call-tone');
+  if (el) {
+    try { el.pause(); } catch {}
+    el.currentTime = 0;
+  }
 }
 
 const iceServers = [
@@ -32,6 +77,7 @@ export const useCallStore = create((set, get) => ({
   incomingFrom: null, // userId of caller
   outgoingTo: null, // userId of callee when inviting
   ending: false, // guard to avoid duplicate end handling
+  incomingCaller: null, // cached caller info { _id, fullName, profilePic }
 
   attachSocket: (socket) => {
     if (!socket) return;
@@ -49,12 +95,34 @@ export const useCallStore = create((set, get) => ({
     socket.off('call:end');
 
     // Call invitation handlers
-    socket.on('call:invite', ({ from }) => {
-      // Show ringing; wait for user to accept/reject
-      set({ ringing: true, incomingFrom: from, peerUserId: from, isCalling: false, inCall: false });
-      toast((t) => (
-        `Incoming call`
-      ));
+    socket.on('call:invite', ({ from, fromUser }) => {
+      // Prefer strictly the backend-provided identity to avoid showing the wrong user
+      const auth = useAuthStore.getState();
+      const chatState = useChatStore.getState();
+      let caller = null;
+      if (fromUser && typeof fromUser === 'object') {
+        caller = {
+          _id: fromUser._id || from,
+          fullName: fromUser.fullName,
+          profilePic: fromUser.profilePic,
+        };
+      }
+      // Guard against accidentally showing self
+      if (caller && auth?.authUser && caller._id === auth.authUser._id) {
+        caller = null;
+      }
+      // Final resolution: if payload missing or equals self, use selected chat user (the one you're in a thread with)
+      let resolved = caller ? { _id: caller._id, fullName: caller.fullName, profilePic: caller.profilePic } : null;
+      if (!resolved && chatState?.selectedUser) {
+        const su = chatState.selectedUser;
+        // Only use selectedUser if it is not self
+        if (!auth?.authUser || su._id !== auth.authUser._id) {
+          resolved = { _id: su._id, fullName: su.fullName, profilePic: su.profilePic };
+        }
+      }
+      set({ ringing: true, incomingFrom: from, peerUserId: from, isCalling: false, inCall: false, incomingCaller: resolved });
+      toast(`Incoming call${resolved?.fullName ? ` from ${resolved.fullName}` : ''}`);
+      playRingtone();
     });
 
     socket.on('call:accept', async ({ from }) => {
@@ -76,11 +144,25 @@ export const useCallStore = create((set, get) => ({
     });
 
     socket.on('call:reject', ({ from, reason }) => {
-      const { outgoingTo } = get();
-      if (!outgoingTo || outgoingTo !== from) return;
-      console.log('Call rejected', reason);
-      set({ isCalling: false, outgoingTo: null, peerUserId: null });
-      toast.error('Call declined');
+      const { outgoingTo, incomingFrom, ringing } = get();
+
+      // Handles when the callee rejects the call, notifying the caller.
+      if (outgoingTo && outgoingTo === from) {
+        console.log('Call rejected by callee', reason);
+        set({ isCalling: false, outgoingTo: null, peerUserId: null });
+        toast.error('Call declined');
+        stopRingtone();
+        return;
+      }
+
+      // Handles when the caller cancels the call, notifying the callee.
+      if (ringing && incomingFrom && incomingFrom === from) {
+        console.log('Call cancelled by caller', reason);
+        set({ ringing: false, incomingFrom: null, peerUserId: null, incomingCaller: null });
+        toast.error('Call cancelled');
+        stopRingtone();
+        return;
+      }
     });
 
     socket.on('call:end', ({ from }) => {
@@ -88,6 +170,7 @@ export const useCallStore = create((set, get) => ({
       if (peerUserId !== from || ending) return;
       // Remote ended the call; do not emit back to avoid loops
       get().endCall({ remote: true });
+      stopRingtone();
     });
 
     socket.on('webrtc:offer', async ({ offer, from }) => {
@@ -105,6 +188,7 @@ export const useCallStore = create((set, get) => ({
         get().socket.emit('webrtc:answer', { answer, to: from });
         set({ inCall: true, isCalling: false, peerUserId: from, ringing: false, incomingFrom: null });
         toast.success('Call connected');
+        stopRingtone();
       } catch (err) {
         console.error('Error handling offer:', err);
       }
@@ -115,7 +199,8 @@ export const useCallStore = create((set, get) => ({
         const pc = get().pc;
         if (!pc) return;
         await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        set({ inCall: true, isCalling: false });
+        // Connection should be established soon after answer is set
+        set({ inCall: true, isCalling: false, ringing: false });
       } catch (err) {
         console.error('Error handling answer:', err);
       }
@@ -145,6 +230,17 @@ export const useCallStore = create((set, get) => ({
       event.streams[0].getTracks().forEach((t) => remoteStream.addTrack(t));
       const audioEl = ensureRemoteAudioEl();
       audioEl.srcObject = remoteStream;
+      // Attempt to play in case autoplay policies interfere
+      try { audioEl.play?.(); } catch {}
+    };
+
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState;
+      if (state === 'connected') {
+        toast.success('Peer connection established');
+      } else if (state === 'failed' || state === 'disconnected') {
+        toast.error('Call connection lost');
+      }
     };
 
     pc.onicecandidate = (event) => {
@@ -169,7 +265,9 @@ export const useCallStore = create((set, get) => ({
     try {
       // Send invitation first; wait for accept before creating offer
       set({ isCalling: true, outgoingTo: calleeUserId, peerUserId: calleeUserId });
-      socket.emit('call:invite', { to: calleeUserId });
+      const authUser = useAuthStore.getState().authUser;
+      const fromUser = authUser ? { _id: authUser._id, fullName: authUser.fullName, profilePic: authUser.profilePic } : undefined;
+      socket.emit('call:invite', { to: calleeUserId, fromUser });
       toast('Calling...');
     } catch (err) {
       console.error('Error starting call:', err);
@@ -184,6 +282,18 @@ export const useCallStore = create((set, get) => ({
     socket.emit('call:accept', { to: incomingFrom });
     // Peer will send offer; we will answer in webrtc:offer handler
     toast.success('Accepted call');
+    // Hide popup immediately while we wait for the offer
+    set({ ringing: false, incomingFrom: null, incomingCaller: null });
+    stopRingtone();
+  },
+
+  cancelOutgoingCall: async (reason = 'cancelled') => {
+    const { socket, outgoingTo } = get();
+    if (!socket || !outgoingTo) return;
+    socket.emit('call:reject', { to: outgoingTo, reason });
+    set({ isCalling: false, outgoingTo: null, peerUserId: null });
+    toast('Call cancelled');
+    stopRingtone();
   },
 
   rejectCall: async (reason = 'declined') => {
@@ -192,6 +302,7 @@ export const useCallStore = create((set, get) => ({
     socket.emit('call:reject', { to: incomingFrom, reason });
     set({ ringing: false, incomingFrom: null, peerUserId: null });
     toast('Declined call');
+    stopRingtone();
   },
 
   endCall: async (options = {}) => {
@@ -214,9 +325,10 @@ export const useCallStore = create((set, get) => ({
     }
     const audioEl = document.getElementById('remote-audio');
     if (audioEl) audioEl.srcObject = null;
-    set({ pc: null, localStream: null, remoteStream: null, inCall: false, isCalling: false, peerUserId: null, outgoingTo: null, ringing: false, incomingFrom: null, ending: false });
+    set({ pc: null, localStream: null, remoteStream: null, inCall: false, isCalling: false, peerUserId: null, outgoingTo: null, ringing: false, incomingFrom: null, incomingCaller: null, ending: false });
     if (!silent) {
       toast('Call ended');
     }
+    stopRingtone();
   },
 }));

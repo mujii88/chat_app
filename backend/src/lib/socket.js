@@ -1,6 +1,7 @@
 import {Server, Socket } from 'socket.io';
 import http from  'http';
 import express from 'express';
+import User from '../models/user.models.js';
 
 
 const app=express()
@@ -31,10 +32,21 @@ io.on('connection',(socket)=>{
     io.emit('getOnlineUsers',Object.keys(userSocketMap));
 
     // Call invitation signaling
-    socket.on('call:invite', ({ to }) => {
-        const receiverSocketId = getReceiverSocketId(to);
-        if (receiverSocketId) {
-            io.to(receiverSocketId).emit('call:invite', { from: userId });
+    socket.on('call:invite', async ({ to, fromUser }) => {
+        try {
+            const receiverSocketId = getReceiverSocketId(to);
+            if (!receiverSocketId) return;
+            let caller = fromUser;
+            if (!caller) {
+                const user = await User.findById(userId).select('fullName profilePic');
+                if (user) {
+                    caller = { _id: String(user._id), fullName: user.fullName, profilePic: user.profilePic };
+                }
+            }
+            io.to(receiverSocketId).emit('call:invite', { from: userId, fromUser: caller });
+        } catch (e) {
+            const receiverSocketId = getReceiverSocketId(to);
+            if (receiverSocketId) io.to(receiverSocketId).emit('call:invite', { from: userId });
         }
     });
 

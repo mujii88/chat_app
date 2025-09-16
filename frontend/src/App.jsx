@@ -12,6 +12,7 @@ import {Loader} from 'lucide-react'
 import { Navigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { useThemeStore } from './store/useThemeStore'
+import IncomingCallModal from './components/IncomingCallModal';
 const App = () => {
   const{authUser,checkAuth,isCheckingAuth,onlineUsers}=useAuthStore()
   const {theme}=useThemeStore()
@@ -31,6 +32,7 @@ const App = () => {
   return (
     <div data-theme={theme}>
       <Navbar/>
+      <IncomingCallModal/>
       <Routes>
         <Route path="/" element={authUser?<HomePage/>:<Navigate to="/login"/>}/>
         <Route path="/signup" element={!authUser?<SignUpPage/>:<Navigate to="/"/>}/>

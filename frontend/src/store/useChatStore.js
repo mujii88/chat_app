@@ -77,4 +77,26 @@ export const useChatStore = create((set, get) => ({
 
   setSelectedUser: (selectedUser) => set({ selectedUser }),
 
+  getUserById: async (userId) => {
+    const { users } = get();
+    // Check if user is already in the store
+    const user = users.find(u => u._id === userId);
+    if (user) {
+      return user;
+    }
+
+    // If not, fetch from the API
+    try {
+      const res = await axiosInstance.get(`/users/${userId}`);
+      const fetchedUser = res.data;
+      // Add the new user to the users array without removing existing ones
+      set(state => ({ users: [...state.users, fetchedUser] }));
+      return fetchedUser;
+    } catch (error) {
+      console.error('Failed to fetch user by ID:', error);
+      toast.error(error.response?.data?.message || 'Failed to get user details');
+      return null;
+    }
+  },
+
 }));
