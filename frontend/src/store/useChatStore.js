@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import toast from 'react-hot-toast';
 import { axiosInstance } from '../lib/axios';
 import { useAuthStore } from './useAuthStore';
+import notificationSound from '../lib/notificationSound';
 
 export const useChatStore = create((set, get) => ({
 
@@ -10,6 +11,7 @@ export const useChatStore = create((set, get) => ({
   selectedUser: null,
   isUsersLoading: false,
   isMessagesLoading: false,
+  unreadCounts: {},
 
   getUsers: async () => {
     set({ isUsersLoading: true });
@@ -17,6 +19,13 @@ export const useChatStore = create((set, get) => ({
       const res = await axiosInstance.get('/messages/users');
       console.log(res);
       set({ users: res.data });
+      
+      // Extract unread counts from users data
+      const unreadCounts = {};
+      res.data.forEach(user => {
+        unreadCounts[user._id] = user.unreadCount || 0;
+      });
+      set({ unreadCounts });
     } catch (error) {
       toast.error(error.response.data.message);
     } finally {
@@ -29,6 +38,17 @@ export const useChatStore = create((set, get) => ({
     try {
       const res = await axiosInstance.get(`/messages/${userId}`);
       set({ messages: res.data.messages });
+      
+      // Mark messages as read and update unread count
+      const { unreadCounts } = get();
+      if (unreadCounts[userId] > 0) {
+        set({ 
+          unreadCounts: { 
+            ...unreadCounts, 
+            [userId]: 0 
+          } 
+        });
+      }
     } catch (error) {
       toast.error(error.response.data.message);
     } finally {
@@ -53,17 +73,47 @@ export const useChatStore = create((set, get) => ({
   },
 
   subscribeToMessages: () => {
-    const { selectedUser } = get();
-    if (!selectedUser) return;
-
     const socket = useAuthStore.getState().socket;
 
     socket.on("newMessage", (newMessage) => {
-      const isMessageSentFromSelectedUser = newMessage.senderId === selectedUser._id;
-      if (!isMessageSentFromSelectedUser) return;
+      const { unreadCounts, selectedUser } = get();
+      const { authUser } = useAuthStore.getState();
+      const isMessageSentFromSelectedUser = newMessage.senderId === selectedUser?._id;
+      const isMessageFromMe = newMessage.senderId === authUser._id;
+      
+      if (isMessageSentFromSelectedUser) {
+        // Message from currently selected user - add to messages
+        set({
+          messages: [...get().messages, newMessage],
+        });
+        
+        // Play notification sound for incoming messages (not from me)
+        if (!isMessageFromMe) {
+          notificationSound.playNotificationSound();
+        }
+      } else {
+        // Message from other user - increment unread count
+        set({
+          unreadCounts: {
+            ...unreadCounts,
+            [newMessage.senderId]: (unreadCounts[newMessage.senderId] || 0) + 1
+          }
+        });
+        
+        // Play notification sound for new messages (not from me)
+        if (!isMessageFromMe) {
+          notificationSound.playNotificationSound();
+        }
+      }
+    });
 
+    socket.on("messagesRead", ({ senderId }) => {
+      const { unreadCounts } = get();
       set({
-        messages: [...get().messages, newMessage],
+        unreadCounts: {
+          ...unreadCounts,
+          [senderId]: 0
+        }
       });
     });
   },
@@ -71,11 +121,26 @@ export const useChatStore = create((set, get) => ({
   unsubscribeFromMessages: () => {
     const socket = useAuthStore.getState().socket;
 
-      socket.off('newMessage');
-
+    socket.off('newMessage');
+    socket.off('messagesRead');
   },
 
-  setSelectedUser: (selectedUser) => set({ selectedUser }),
+  setSelectedUser: (selectedUser) => {
+    set({ selectedUser });
+    
+    // Mark messages as read when selecting a user
+    if (selectedUser) {
+      const { unreadCounts } = get();
+      if (unreadCounts[selectedUser._id] > 0) {
+        set({ 
+          unreadCounts: { 
+            ...unreadCounts, 
+            [selectedUser._id]: 0 
+          } 
+        });
+      }
+    }
+  },
 
   getUserById: async (userId) => {
     const { users } = get();

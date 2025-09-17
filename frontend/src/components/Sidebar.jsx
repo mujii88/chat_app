@@ -5,7 +5,7 @@ import SidebarSkeleton from "./skeletons/SidebarSkeleton";
 import { Users } from "lucide-react";
 
 const Sidebar = () => {
-  const { getUsers, users, selectedUser, setSelectedUser, isUsersLoading } = useChatStore();
+  const { getUsers, users, selectedUser, setSelectedUser, isUsersLoading, unreadCounts } = useChatStore();
 
   const { onlineUsers } = useAuthStore();
   const [showOnlineOnly, setShowOnlineOnly] = useState(false);
@@ -65,15 +65,28 @@ const Sidebar = () => {
                   rounded-full ring-2 ring-zinc-900"
                 />
               )}
+              {/* Mobile unread indicator */}
+              {unreadCounts[user._id] > 0 && (
+                <span className="absolute -top-1 -right-1 bg-primary text-primary-content text-xs rounded-full min-w-[18px] h-[18px] flex items-center justify-center lg:hidden">
+                  {unreadCounts[user._id] > 9 ? '9+' : unreadCounts[user._id]}
+                </span>
+              )}
             </div>
 
             {/* User info - only visible on larger screens */}
-            <div className="hidden lg:block text-left min-w-0">
+            <div className="hidden lg:block text-left min-w-0 flex-1">
               <div className="font-medium truncate">{user.fullName}</div>
               <div className="text-sm text-zinc-400">
                 {onlineUsers.includes(user._id) ? "Online" : "Offline"}
               </div>
             </div>
+
+            {/* Desktop unread message indicator */}
+            {unreadCounts[user._id] > 0 && (
+              <div className="hidden lg:flex bg-primary text-primary-content text-xs rounded-full min-w-[20px] h-5 items-center justify-center px-2">
+                {unreadCounts[user._id] > 99 ? '99+' : unreadCounts[user._id]}
+              </div>
+            )}
           </button>
         ))}
 
